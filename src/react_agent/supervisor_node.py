@@ -26,9 +26,85 @@ def supervisor_node(state: State) -> Command[SupervisorDestinations]:
     Returns:
         Command with routing information
     """
+    # Get configuration to use supervisor_model
+    configuration = Configuration.from_context()
+    
+    # Track steps to prevent infinite loops
+    steps_taken = state.get("steps_taken", 0)
+    steps_taken += 1
+    state_updates = {"steps_taken": steps_taken}
+    
+    # Check if we've hit our step limit
+    if steps_taken >= configuration.recursion_limit - 5:  # Buffer of 5 steps
+        # Extract the best answer we have from context if possible
+        context = state.get("context", {})
+        answer = extract_best_answer_from_context(context)
+        
+        return Command(
+            goto="final_answer",
+            update={
+                "messages": [
+                    HumanMessage(
+                        content=f"Maximum steps ({steps_taken}) reached. Extracting best answer from available information.",
+                        name="supervisor"
+                    )
+                ],
+                "draft_answer": f"FINAL ANSWER: {answer}",
+                "retry_exhausted": True,  # Flag to indicate we've exhausted retries
+                "steps_taken": steps_taken
+            }
+        )
+    
+    # Safety check - prevent infinite loops by forcing termination after too many retry steps
+    retry_count = state.get("retry_count", 0)
+    max_retries = 2  # Maximum number of allowed retries
+    
+    if retry_count > max_retries:
+        # Extract the best answer we have from context if possible
+        context = state.get("context", {})
+        answer = extract_best_answer_from_context(context)
+        
+        return Command(
+            goto="final_answer",
+            update={
+                "messages": [
+                    HumanMessage(
+                        content=f"Maximum retries ({max_retries}) reached. Extracting best answer from available information.",
+                        name="supervisor"
+                    )
+                ],
+                "draft_answer": f"FINAL ANSWER: {answer}",
+                "retry_exhausted": True,  # Flag to indicate we've exhausted retries
+                "steps_taken": steps_taken
+            }
+        )
+        
     # Check if we need a plan
     if not state.get("plan"):
-        return Command(goto="planner")
+        return Command(
+            goto="planner",
+            update={
+                **state_updates
+            }
+        )
+    
+    # Validate that the plan has at least one step
+    plan = state.get("plan")
+    if not plan.get("steps") or len(plan.get("steps", [])) == 0:
+        # Plan has no steps, go back to planner with explicit instructions
+        return Command(
+            goto="planner",
+            update={
+                "messages": [
+                    HumanMessage(
+                        content="Previous plan had 0 steps. Please create a plan with at least 1 step to solve the user's question.",
+                        name="supervisor"
+                    )
+                ],
+                "plan": None,
+                **state_updates
+            }
+        )
     
     # Check if we have a critic verdict that requires replanning
     critic_verdict = state.get("critic_verdict")
@@ -48,9 +124,65 @@ def supervisor_node(state: State) -> Command[SupervisorDestinations]:
                 }
             )
         elif critic_verdict.get("verdict") == VERDICTS[1]:  # RETRY
+            # IMPORTANT: Get the current retry count BEFORE incrementing
+            current_retry_count = state.get("retry_count", 0)
+            
+            # Check if we're at the maximum allowed retries
+            if current_retry_count >= max_retries:
+                # Extract best answer and go to final_answer
+                context = state.get("context", {})
+                answer = extract_best_answer_from_context(context)
+                
+                return Command(
+                    goto="final_answer",
+                    update={
+                        "messages": [
+                            HumanMessage(
+                                content=f"Maximum retries ({max_retries}) reached. Proceeding with best available answer.",
+                                name="supervisor"
+                            )
+                        ],
+                        "draft_answer": f"FINAL ANSWER: {answer}",
+                        "retry_exhausted": True  # Flag to indicate we've exhausted retries
+                    }
+                )
+            
             # Reset the plan but KEEP the context from previous iterations
             context = state.get("context", {})
             worker_results = state.get("worker_results", {})
+            
+            # Get the critic's reason for rejection, if any
+            reason = critic_verdict.get("reason", "")
+            if not reason or reason.strip() == "\"":
+                reason = "Answer did not meet format requirements"
+                
+            # Check if this is a formatting issue
+            format_issues = [
+                "format", "concise", "explanation", "not formatted", 
+                "instead of just", "contains explanations", "FINAL ANSWER"
+            ]
+            is_format_issue = any(issue in reason.lower() for issue in format_issues)
+            
+            # If we have enough information but the format is wrong, go directly to final answer
+            has_sufficient_info = has_sufficient_information(state)
+            
+            if is_format_issue and has_sufficient_info and current_retry_count >= 0:
+                # We have information but formatting is wrong - skip planning and go to final answer
+                return Command(
+                    goto="final_answer",
+                    update={
+                        "messages": [
+                            HumanMessage(
+                                content="We have sufficient information but formatting issues. Generating properly formatted answer.",
+                                name="supervisor"
+                            )
+                        ],
+                        "retry_count": current_retry_count + 1  # Still increment retry count
+                    }
+                )
+            
+            # Increment the retry counter
+            next_retry_count = current_retry_count + 1
             
             return Command(
                 goto="planner", 
@@ -62,10 +194,12 @@ def supervisor_node(state: State) -> Command[SupervisorDestinations]:
                     # Keep the context and worker_results
                     "context": context,
                     "worker_results": worker_results,
-                    # Add a message about the retry
+                    # Track retries - IMPORTANT: store the incremented count
+                    "retry_count": next_retry_count,
+                    # Add a message about the retry (using the INCREMENTED count)
                     "messages": [
                         HumanMessage(
-                            content=f"Retrying with new plan. Reason: {critic_verdict.get('reason', 'Incomplete answer')}",
+                            content=f"Retrying with new plan (retry #{next_retry_count}). Reason: {reason}",
                             name="supervisor"
                         )
                     ]
@@ -168,6 +302,105 @@ def supervisor_node(state: State) -> Command[SupervisorDestinations]:
         goto=worker_destination,
         update={
             "messages": messages_update,
-            "next": worker  # For backward compatibility
+            "next": worker,  # For backward compatibility
+            **state_updates
         }
-    ) 
+    )
+
+def extract_best_answer_from_context(context):
+    """Extract the best available answer from context.
+    
+    This is a generic function to extract answers from any type of question context.
+    It progressively tries different strategies to find a suitable answer.
+    
+    Args:
+        context: The state context containing worker outputs
+        
+    Returns:
+        Best answer found or "unknown" if nothing suitable is found
+    """
+    answer = "unknown"
+    
+    # First check if the coder already provided a properly formatted answer
+    if "coder" in context:
+        coder_content = context["coder"]
+        
+        # Look for "FINAL ANSWER: X" pattern in the coder output
+        import re
+        answer_match = re.search(r"FINAL ANSWER:\s*(.*?)(?:\n|$)", coder_content, re.IGNORECASE)
+        if answer_match:
+            return answer_match.group(1).strip()
+    
+    # If no answer in coder output, check researcher content
+    if "researcher" in context:
+        researcher_content = context["researcher"]
+        
+        # Look for lists in the researcher content (common pattern)
+        import re
+        
+        # Look for bulleted list items
+        list_items = re.findall(r"[-•*]\s+([^:\n]+)", researcher_content)
+        if list_items:
+            # Format as comma-separated list
+            answer = ",".join(item.strip() for item in list_items)
+            return answer
+            
+        # Look for emphasized/bold items which might be key information
+        bold_items = re.findall(r"\*\*([^*]+)\*\*", researcher_content)
+        if bold_items:
+            # Join the important items as a comma-separated list
+            processed_items = []
+            for item in bold_items:
+                # Remove common filler words and clean up the item
+                clean_item = re.sub(r'(^|\s)(a|an|the|is|are|was|were|be|been)(\s|$)', ' ', item)
+                clean_item = clean_item.strip()
+                if clean_item and len(clean_item) < 30:  # Only include reasonably short items
+                    processed_items.append(clean_item)
+            
+            if processed_items:
+                answer = ",".join(processed_items)
+                return answer
+    
+    # If we still don't have an answer, try to extract common entities
+    combined_content = ""
+    for worker_type, content in context.items():
+        combined_content += " " + content
+    
+    # Look for numbers in the content
+    import re
+    numbers = re.findall(r'\b(\d+(?:\.\d+)?)\b', combined_content)
+    if numbers:
+        answer = numbers[0]  # Use the first number found
+    
+    return answer
+
+def has_sufficient_information(state):
+    """Determine if we have enough information to generate a final answer.
+    
+    Args:
+        state: The current conversation state
+        
+    Returns:
+        Boolean indicating if we have sufficient information
+    """
+    context = state.get("context", {})
+    
+    # If we have both researcher and coder outputs, we likely have enough info
+    if "researcher" in context and "coder" in context:
+        return True
+        
+    # If we have a substantial researcher output, that might be enough
+    if "researcher" in context and len(context["researcher"]) > 150:
+        return True
+        
+    # If we have any worker output that contains lists or formatted data
+    for worker, content in context.items():
+        if content and (
+            "- " in content or  # Bullet point
+            "•" in content or   # Bullet point
+            "*" in content or   # Emphasis or bullet
+            ":" in content      # Definition or explanation
+        ):
+            return True
+    
+    return False 

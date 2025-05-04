@@ -8,7 +8,8 @@ from typing import Dict, List, Literal, Optional, Union, Type, cast
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, START, END
-from langgraph.prebuilt import create_react_agent
+# Import adjusted for compatibility
+from langgraph.prebuilt import create_react_agent  # Try original import path first
 from langgraph.types import Command
 
 from react_agent.configuration import Configuration
@@ -56,8 +57,12 @@ def planner_node(state: State) -> Command[WorkerDestination]:
         Command to update the state with a plan
     """
     configuration = Configuration.from_context()
-    # Use a lightweight reasoning model for planning
+    # Use the specific planner model
     planner_llm = load_chat_model(configuration.planner_model)
+    
+    # Track steps
+    steps_taken = state.get("steps_taken", 0)
+    steps_taken += 1
     
     # Get the original user question (the latest user message)
     user_messages = [m for m in state["messages"] if is_user_message(m)]
@@ -94,7 +99,8 @@ def planner_node(state: State) -> Command[WorkerDestination]:
                     content=f"Created plan with {len(plan['steps'])} steps",
                     name="planner"
                 )
-            ]
+            ],
+            "steps_taken": steps_taken
         }
     )
 
@@ -102,81 +108,113 @@ def planner_node(state: State) -> Command[WorkerDestination]:
 # --- Final Answer node -----------------------------------------------------
 
 def final_answer_node(state: State) -> Command[Literal["__end__"]]:
-    """Creates a polished final answer based on the worker results.
+    """Generate a final answer based on gathered information.
 
     Args:
         state: The current state with messages and context
 
     Returns:
-        Command with the final answer
+        Command with final answer
     """
     configuration = Configuration.from_context()
-    final_llm = load_chat_model(configuration.model)
-    
-    # Get the original user question
-    user_messages = [m for m in state["messages"] if is_user_message(m)]
-    original_question = get_message_content(user_messages[-1]) if user_messages else "Help me"
-    
-    # Get the context and worker results
-    context = state.get("context", {})
-    worker_results = state.get("worker_results", {})
 
-    # Compose a prompt for the final answer
-    final_prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are tasked with creating a clear, concise final answer to the user's question.
-        Focus on directly answering what was asked without unnecessary details.
+    # Track steps
+    steps_taken = state.get("steps_taken", 0)
+    steps_taken += 1
+    
+    # Check if we've exhausted retries and already have a draft answer
+    retry_exhausted = state.get("retry_exhausted", False)
+    draft_answer = state.get("draft_answer")
+    
+    # Variable to store the final answer
+    gaia_answer = ""
+    
+    if retry_exhausted and draft_answer and draft_answer.startswith("FINAL ANSWER:"):
+        # If supervisor already provided a properly formatted answer after exhausting retries,
+        # use it directly without calling the model again
+        import re
+        final_answer_match = re.search(r"FINAL ANSWER:\s*(.*?)(?:\n|$)", draft_answer, re.IGNORECASE)
+        if final_answer_match:
+            gaia_answer = final_answer_match.group(1).strip()
+        else:
+            gaia_answer = "unknown"
+    else:
+        # Use the specific final answer model
+        final_llm = load_chat_model(configuration.final_answer_model)
         
-        Guidelines:
-        1. Be concise - aim for 3-5 sentences maximum
-        2. Present numerical results clearly with appropriate units
-        3. Use bullet points for multiple parts or options
-        4. Never mention that different agents worked on this answer
-        5. Don't repeat the question in your answer
-        6. Don't use phrases like "Based on the information provided"
+        # Get the original user question (the latest user message)
+        user_messages = [m for m in state["messages"] if is_user_message(m)]
+        original_question = get_message_content(user_messages[-1]) if user_messages else "Help me"
         
-        Your answer should be direct, precise, and user-friendly."""),
-        ("user", """Original question: {question}
+        # Check if we already have a draft answer from supervisor
+        if draft_answer and draft_answer.startswith("FINAL ANSWER:"):
+            # If supervisor already provided a properly formatted answer, use it directly
+            raw_answer = draft_answer
+        else:
+            # Get the context and worker results
+            context = state.get("context", {})
+            worker_results = state.get("worker_results", {})
+
+            # Compose a prompt for the final answer using the GAIA-specific format
+            final_prompt = ChatPromptTemplate.from_messages([
+                ("system", prompts.FINAL_ANSWER_PROMPT),
+                ("user", prompts.FINAL_ANSWER_USER_PROMPT)
+            ])
+            
+            # Format the context information more effectively
+            context_list = []
+            # First include researcher context as it provides background
+            if "researcher" in context:
+                context_list.append(f"Research information: {context['researcher']}")
+            
+            # Then include coder results which are typically calculations
+            if "coder" in context:
+                context_list.append(f"Calculation results: {context['coder']}")
+            
+            # Add any other workers
+            for worker, content in context.items():
+                if worker not in ["researcher", "coder"]:
+                    context_list.append(f"{worker.capitalize()}: {content}")
+            
+            # Get the final answer
+            formatted_messages = final_prompt.format_messages(
+                question=original_question,
+                context="\n\n".join(context_list)
+            )
+            
+            raw_answer = final_llm.invoke(formatted_messages).content
         
-        Information available:
-        {context}
+        # Extract the answer in GAIA format: "FINAL ANSWER: [x]"
+        import re
+        gaia_answer = raw_answer
+        final_answer_match = re.search(r"FINAL ANSWER:\s*(.*?)(?:\n|$)", raw_answer, re.IGNORECASE)
+        if final_answer_match:
+            gaia_answer = final_answer_match.group(1).strip()
         
-        Please provide a concise, direct answer to the question.""")
-    ])
+        # Ensure answer is properly formatted - if we don't have a valid answer
+        # but have sufficient context, try to extract directly
+        if configuration.allow_agent_to_extract_answers and (not gaia_answer or gaia_answer.lower() in ["unknown", "insufficient information"]):
+            context = state.get("context", {})
+            from react_agent.supervisor_node import extract_best_answer_from_context
+            extracted_answer = extract_best_answer_from_context(context)
+            if extracted_answer != "unknown":
+                gaia_answer = extracted_answer
     
-    # Format the context information more effectively
-    context_list = []
-    # First include researcher context as it provides background
-    if "researcher" in context:
-        context_list.append(f"Research information: {context['researcher']}")
-    
-    # Then include coder results which are typically calculations
-    if "coder" in context:
-        context_list.append(f"Calculation results: {context['coder']}")
-    
-    # Add any other workers
-    for worker, content in context.items():
-        if worker not in ["researcher", "coder"]:
-            context_list.append(f"{worker.capitalize()}: {content}")
-    
-    # Get the final answer
-    formatted_messages = final_prompt.format_messages(
-        question=original_question,
-        context="\n\n".join(context_list)
-    )
-    
-    final_answer = final_llm.invoke(formatted_messages).content
-    
-    # Return the final answer
+    # Set status to "final_answer_generated" to indicate we're done
     return Command(
         goto=END,
         update={
             "messages": [
                 AIMessage(
-                    content=final_answer,
+                    content=f"FINAL ANSWER: {gaia_answer}",
                     name="supervisor"
                 )
             ],
-            "next": "FINISH"  # Update next to indicate we're done
+            "next": "FINISH",  # Update next to indicate we're done
+            "gaia_answer": gaia_answer,  # Store answer in GAIA-compatible format
+            "submitted_answer": gaia_answer,  # Store as submitted_answer for GAIA benchmark
+            "status": "final_answer_generated",  # Add status to indicate we're complete
+            "steps_taken": steps_taken
         }
     )
 
@@ -193,7 +231,12 @@ def critic_node(state: State) -> Command[Union[WorkerDestination, SupervisorDest
         Command with evaluation verdict
     """
     configuration = Configuration.from_context()
-    critic_llm = load_chat_model(configuration.model)
+    # Use the specific critic model
+    critic_llm = load_chat_model(configuration.critic_model)
+    
+    # Track steps
+    steps_taken = state.get("steps_taken", 0)
+    steps_taken += 1
     
     # Get the original user question (the latest user message)
     user_messages = [m for m in state["messages"] if is_user_message(m)]
@@ -205,7 +248,7 @@ def critic_node(state: State) -> Command[Union[WorkerDestination, SupervisorDest
     # Create a chat prompt template with proper formatting
     critic_prompt_template = ChatPromptTemplate.from_messages([
         ("system", prompts.CRITIC_PROMPT),
-        ("user", "Original question: {question}\n\nDraft answer: {answer}")
+        ("user", prompts.CRITIC_USER_PROMPT)
     ])
     
     # Format the prompt with the necessary variables
@@ -222,7 +265,7 @@ def critic_node(state: State) -> Command[Union[WorkerDestination, SupervisorDest
     
     # Add a message about the verdict
     if verdict["verdict"] == VERDICTS[0]:  # CORRECT
-        verdict_message = "Answer is complete and accurate."
+        verdict_message = "Answer is complete, accurate, and properly formatted for GAIA."
         goto = "final_answer"  # Go to final answer node if correct
     else:
         verdict_message = f"Answer needs improvement. Reason: {verdict.get('reason', 'Unknown')}"
@@ -238,7 +281,8 @@ def critic_node(state: State) -> Command[Union[WorkerDestination, SupervisorDest
                     content=verdict_message,
                     name="critic"
                 )
-            ]
+            ],
+            "steps_taken": steps_taken
         }
     )
 
@@ -258,17 +302,19 @@ def create_worker_node(worker_type: str):
         raise ValueError(f"Unknown worker type: {worker_type}")
     
     configuration = Configuration.from_context()
-    llm = load_chat_model(configuration.model)
-
-    # Get the appropriate prompt and tools for this worker type
+    
+    # Select the appropriate model for each worker type
     if worker_type == "researcher":
+        llm = load_chat_model(configuration.researcher_model)
         worker_prompt = prompts.RESEARCHER_PROMPT
         worker_tools = [tavily_tool]
     elif worker_type == "coder":
+        llm = load_chat_model(configuration.coder_model)
         worker_prompt = prompts.CODER_PROMPT
         worker_tools = [python_repl_tool]
     else:
         # Default case
+        llm = load_chat_model(configuration.model)
         worker_prompt = getattr(prompts, f"{worker_type.upper()}_PROMPT", prompts.SYSTEM_PROMPT)
         worker_tools = TOOLS
     
@@ -289,6 +335,10 @@ def create_worker_node(worker_type: str):
         Returns:
             Command to return to supervisor with results
         """
+        # Track steps
+        steps_taken = state.get("steps_taken", 0)
+        steps_taken += 1
+        
         # Get the last message from the supervisor, which contains our task
         task_message = None
         if state.get("messages"):
@@ -306,7 +356,8 @@ def create_worker_node(worker_type: str):
                             content=f"Error: No task message found for {worker_type}",
                             name=worker_type
                         )
-                    ]
+                    ],
+                    "steps_taken": steps_taken
                 }
             )
         
@@ -347,7 +398,8 @@ def create_worker_node(worker_type: str):
                 ],
                 "current_step_index": current_step_index + 1,
                 "context": context_update,
-                "worker_results": worker_results
+                "worker_results": worker_results,
+                "steps_taken": steps_taken
             },
             goto="supervisor",
         )
@@ -469,13 +521,53 @@ def get_compiled_graph(checkpointer=None):
     Returns:
         Compiled StateGraph ready for execution
     """
+    # Get configuration
+    configuration = Configuration.from_context()
+    
     builder = create_agent_supervisor_graph()
     
-    # Compile with or without checkpointer
+    # Define termination condition function to prevent loops
+    def should_end(state):
+        """Determine if the graph should terminate."""
+        # End if status is set to final_answer_generated
+        if state.get("status") == "final_answer_generated":
+            return True
+            
+        # End if retry_exhausted flag is set and we've gone through final_answer
+        if state.get("retry_exhausted") and state.get("gaia_answer"):
+            return True
+            
+        # End if we've hit maximum recursion limit defined by LangGraph
+        steps_taken = state.get("steps_taken", 0)
+        if steps_taken >= configuration.recursion_limit - 5:  # Leave buffer
+            return True
+            
+        return False
+    
+    # Define step counter for tracking step count
+    def count_steps(state):
+        """Count steps to prevent infinite loops."""
+        steps_taken = state.get("steps_taken", 0)
+        return {"steps_taken": steps_taken + 1}
+    
+    # Compile the graph (don't use add_state_transform which isn't available)
     if checkpointer:
-        return builder.compile(checkpointer=checkpointer, name="Structured Reasoning Loop")
+        graph = builder.compile(
+            checkpointer=checkpointer, 
+            name="Structured Reasoning Loop"
+        )
     else:
-        return builder.compile(name="Structured Reasoning Loop")
+        graph = builder.compile(
+            name="Structured Reasoning Loop"
+        )
+    
+    # Configure the graph with recursion limit and max iterations
+    graph = graph.with_config({
+        "recursion_limit": configuration.recursion_limit,
+        "max_iterations": configuration.max_iterations
+    })
+    
+    return graph
 
 
 # Initialize a default non-checkpointed graph (for backward compatibility)
