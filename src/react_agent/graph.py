@@ -3,72 +3,285 @@
 The supervisor routes tasks to specialized agents based on the query type.
 """
 
-from typing import Literal
+from typing import Dict, List, Literal, Optional, Union, Type, cast
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command
 
 from react_agent.configuration import Configuration
-from react_agent.state import MEMBERS, OPTIONS, State, Router
+from react_agent.state import WORKERS, MEMBERS, ROUTING, VERDICTS, State, Router, Plan, PlanStep, CriticVerdict
 from react_agent.tools import TOOLS, tavily_tool, python_repl_tool
-from react_agent.utils import load_chat_model, format_system_prompt
+from react_agent.utils import load_chat_model, format_system_prompt, get_message_text
 from react_agent import prompts
+from react_agent.supervisor_node import supervisor_node
 
 
-# --- Supervisor node ------------------------------------------------------
+# Compile-time type definitions
+SupervisorDestinations = Literal["planner", "critic", "researcher", "coder", "final_answer", "__end__"]
+WorkerDestination = Literal["supervisor"]
 
-def supervisor_node(state: State) -> Command[Literal[*MEMBERS, "__end__"]]:
-    """Supervising LLM that decides which specialized agent should act next.
+
+# Helper function to check if a message is from a user
+def is_user_message(message):
+    """Check if a message is from a user regardless of message format."""
+    if isinstance(message, dict):
+        return message.get("role") == "user"
+    elif isinstance(message, HumanMessage):
+        return True
+    return False
+
+
+# Helper function to get message content
+def get_message_content(message):
+    """Extract content from a message regardless of format."""
+    if isinstance(message, dict):
+        return message.get("content", "")
+    elif hasattr(message, "content"):
+        return message.content
+    return ""
+
+
+# --- Planner node ---------------------------------------------------------
+
+def planner_node(state: State) -> Command[WorkerDestination]:
+    """Planning LLM that creates a step-by-step execution plan.
 
     Args:
         state: The current state with messages
 
     Returns:
-        Command with routing information
+        Command to update the state with a plan
     """
     configuration = Configuration.from_context()
-    supervisor_llm = load_chat_model(configuration.model)
+    # Use a lightweight reasoning model for planning
+    planner_llm = load_chat_model(configuration.planner_model)
     
-    # Build messages with raw dict format (matching notebook)
-    messages = [
-        {"role": "system", "content": format_system_prompt(prompts.SUPERVISOR_PROMPT)},
-    ] + state["messages"]
+    # Get the original user question (the latest user message)
+    user_messages = [m for m in state["messages"] if is_user_message(m)]
+    original_question = get_message_content(user_messages[-1]) if user_messages else "Help me"
     
-    # Get structured output from the supervisor model
-    response = supervisor_llm.with_structured_output(Router).invoke(messages)
-    goto = response["next"]
+    # Create a chat prompt template with proper formatting
+    planner_prompt_template = ChatPromptTemplate.from_messages([
+        ("system", prompts.PLANNER_PROMPT),
+        ("user", "{question}")
+    ])
     
-    # Convert FINISH to END for graph routing
-    if goto == "FINISH":
-        goto = END
+    # Format the prompt with the necessary variables
+    formatted_messages = planner_prompt_template.format_messages(
+        question=original_question,
+        system_time=format_system_prompt("{system_time}"),
+        workers=", ".join(WORKERS),
+        worker_options=", ".join([f'"{w}"' for w in WORKERS]),
+        example_worker_1=WORKERS[0] if WORKERS else "researcher",
+        example_worker_2=WORKERS[1] if len(WORKERS) > 1 else "coder"
+    )
+
+    # Get structured output from the planner model
+    plan = planner_llm.with_structured_output(Plan).invoke(formatted_messages)
     
-    return Command(goto=goto, update={"next": goto})
+    # Return with updated state
+    return Command(
+        goto="supervisor",
+        update={
+            "plan": plan,
+            "current_step_index": 0,
+            # Add a message to show the plan was created
+            "messages": [
+                HumanMessage(
+                    content=f"Created plan with {len(plan['steps'])} steps",
+                    name="planner"
+                )
+            ]
+        }
+    )
 
 
-# --- Worker agents --------------------------------------------------------
+# --- Final Answer node -----------------------------------------------------
 
-# Create the research agent (matches notebook pattern)
-def create_researcher_node():
-    """Creates the researcher node function that uses web search.
+def final_answer_node(state: State) -> Command[Literal["__end__"]]:
+    """Creates a polished final answer based on the worker results.
+
+    Args:
+        state: The current state with messages and context
 
     Returns:
-        A function that processes research requests
+        Command with the final answer
     """
     configuration = Configuration.from_context()
-    llm = load_chat_model(configuration.model)
+    final_llm = load_chat_model(configuration.model)
     
-    # Create the agent exactly like in the notebook
-    research_agent = create_react_agent(
-        llm, 
-        tools=[tavily_tool], 
-        prompt=format_system_prompt(prompts.RESEARCHER_PROMPT)
+    # Get the original user question
+    user_messages = [m for m in state["messages"] if is_user_message(m)]
+    original_question = get_message_content(user_messages[-1]) if user_messages else "Help me"
+    
+    # Get the context and worker results
+    context = state.get("context", {})
+    worker_results = state.get("worker_results", {})
+
+    # Compose a prompt for the final answer
+    final_prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are tasked with creating a clear, concise final answer to the user's question.
+        Focus on directly answering what was asked without unnecessary details.
+        
+        Guidelines:
+        1. Be concise - aim for 3-5 sentences maximum
+        2. Present numerical results clearly with appropriate units
+        3. Use bullet points for multiple parts or options
+        4. Never mention that different agents worked on this answer
+        5. Don't repeat the question in your answer
+        6. Don't use phrases like "Based on the information provided"
+        
+        Your answer should be direct, precise, and user-friendly."""),
+        ("user", """Original question: {question}
+        
+        Information available:
+        {context}
+        
+        Please provide a concise, direct answer to the question.""")
+    ])
+    
+    # Format the context information more effectively
+    context_list = []
+    # First include researcher context as it provides background
+    if "researcher" in context:
+        context_list.append(f"Research information: {context['researcher']}")
+    
+    # Then include coder results which are typically calculations
+    if "coder" in context:
+        context_list.append(f"Calculation results: {context['coder']}")
+    
+    # Add any other workers
+    for worker, content in context.items():
+        if worker not in ["researcher", "coder"]:
+            context_list.append(f"{worker.capitalize()}: {content}")
+    
+    # Get the final answer
+    formatted_messages = final_prompt.format_messages(
+        question=original_question,
+        context="\n\n".join(context_list)
     )
     
-    # Define node function (matches notebook pattern)
-    def researcher_node(state: State) -> Command[Literal["supervisor"]]:
-        """Process research queries using web search.
+    final_answer = final_llm.invoke(formatted_messages).content
+    
+    # Return the final answer
+    return Command(
+        goto=END,
+        update={
+            "messages": [
+                AIMessage(
+                    content=final_answer,
+                    name="supervisor"
+                )
+            ],
+            "next": "FINISH"  # Update next to indicate we're done
+        }
+    )
+
+
+# --- Critic node ----------------------------------------------------------
+
+def critic_node(state: State) -> Command[Union[WorkerDestination, SupervisorDestinations]]:
+    """Critic that evaluates if the answer fully satisfies the request.
+    
+    Args:
+        state: The current state with messages and draft answer
+        
+    Returns:
+        Command with evaluation verdict
+    """
+    configuration = Configuration.from_context()
+    critic_llm = load_chat_model(configuration.model)
+    
+    # Get the original user question (the latest user message)
+    user_messages = [m for m in state["messages"] if is_user_message(m)]
+    original_question = get_message_content(user_messages[-1]) if user_messages else "Help me"
+    
+    # Get the draft answer
+    draft_answer = state.get("draft_answer", "No answer provided.")
+    
+    # Create a chat prompt template with proper formatting
+    critic_prompt_template = ChatPromptTemplate.from_messages([
+        ("system", prompts.CRITIC_PROMPT),
+        ("user", "Original question: {question}\n\nDraft answer: {answer}")
+    ])
+    
+    # Format the prompt with the necessary variables
+    formatted_messages = critic_prompt_template.format_messages(
+        question=original_question,
+        answer=draft_answer,
+        system_time=format_system_prompt("{system_time}"),
+        correct_verdict=VERDICTS[0] if VERDICTS else "CORRECT",
+        retry_verdict=VERDICTS[1] if len(VERDICTS) > 1 else "RETRY"
+    )
+
+    # Get structured output from the critic model
+    verdict = critic_llm.with_structured_output(CriticVerdict).invoke(formatted_messages)
+    
+    # Add a message about the verdict
+    if verdict["verdict"] == VERDICTS[0]:  # CORRECT
+        verdict_message = "Answer is complete and accurate."
+        goto = "final_answer"  # Go to final answer node if correct
+    else:
+        verdict_message = f"Answer needs improvement. Reason: {verdict.get('reason', 'Unknown')}"
+        goto = "supervisor"
+    
+    # Return with updated state
+    return Command(
+        goto=goto,
+        update={
+            "critic_verdict": verdict,
+            "messages": [
+                HumanMessage(
+                    content=verdict_message,
+                    name="critic"
+                )
+            ]
+        }
+    )
+
+
+# --- Worker agent factory -------------------------------------------------
+
+def create_worker_node(worker_type: str):
+    """Factory function to create a worker node of the specified type.
+
+    Args:
+        worker_type: The type of worker to create (must be in WORKERS)
+
+    Returns:
+        A function that processes requests for the specified worker type
+    """
+    if worker_type not in WORKERS:
+        raise ValueError(f"Unknown worker type: {worker_type}")
+    
+    configuration = Configuration.from_context()
+    llm = load_chat_model(configuration.model)
+
+    # Get the appropriate prompt and tools for this worker type
+    if worker_type == "researcher":
+        worker_prompt = prompts.RESEARCHER_PROMPT
+        worker_tools = [tavily_tool]
+    elif worker_type == "coder":
+        worker_prompt = prompts.CODER_PROMPT
+        worker_tools = [python_repl_tool]
+    else:
+        # Default case
+        worker_prompt = getattr(prompts, f"{worker_type.upper()}_PROMPT", prompts.SYSTEM_PROMPT)
+        worker_tools = TOOLS
+    
+    # Create the agent
+    worker_agent = create_react_agent(
+        llm, 
+        tools=worker_tools,
+        prompt=format_system_prompt(worker_prompt)
+    )
+    
+    # Define node function
+    def worker_node(state: State) -> Command[WorkerDestination]:
+        """Process requests using the specified worker.
         
         Args:
             state: The current conversation state
@@ -76,57 +289,135 @@ def create_researcher_node():
         Returns:
             Command to return to supervisor with results
         """
-        result = research_agent.invoke(state)
-        return Command(
-            update={
-                "messages": [
-                    HumanMessage(content=result["messages"][-1].content, name="researcher")
-                ]
-            },
-            goto="supervisor",
-        )
-    
-    return researcher_node
-
-
-# Create the coder agent (matches notebook pattern)
-def create_coder_node():
-    """Creates the coder node function that executes Python code.
-    
-    Returns:
-        A function that processes coding requests
-    """
-    configuration = Configuration.from_context()
-    llm = load_chat_model(configuration.model)
-    
-    # Create the agent exactly like in the notebook
-    code_agent = create_react_agent(
-        llm, 
-        tools=[python_repl_tool],
-        prompt=format_system_prompt(prompts.CODER_PROMPT)
-    )
-    
-    # Define node function (matches notebook pattern)
-    def coder_node(state: State) -> Command[Literal["supervisor"]]:
-        """Process coding tasks using Python REPL.
+        # Get the last message from the supervisor, which contains our task
+        task_message = None
+        if state.get("messages"):
+            for msg in reversed(state["messages"]):
+                if hasattr(msg, "name") and msg.name == "supervisor":
+                    task_message = msg
+                    break
         
-        Args:
-            state: The current conversation state
-            
-        Returns:
-            Command to return to supervisor with results
-        """
-        result = code_agent.invoke(state)
+        if not task_message:
+            return Command(
+                goto="supervisor",
+                update={
+                    "messages": [
+                        HumanMessage(
+                            content=f"Error: No task message found for {worker_type}",
+                            name=worker_type
+                        )
+                    ]
+                }
+            )
+        
+        # Create a new state with just the relevant messages for this worker
+        # This prevents confusion from unrelated parts of the conversation
+        agent_input = {
+            "messages": [
+                # Include the first user message for context
+                state["messages"][0] if state["messages"] else HumanMessage(content="Help me"),
+                # Include the task message
+                task_message
+            ]
+        }
+        
+        # Invoke the agent with the clean input
+        result = worker_agent.invoke(agent_input)
+        
+        # Extract the result from the agent response
+        result_content = extract_worker_result(worker_type, result, state)
+        
+        # Store the worker's result in shared context
+        context_update = state.get("context", {}).copy()
+        context_update[worker_type] = result_content
+        
+        # Store in worker_results history
+        worker_results = state.get("worker_results", {}).copy()
+        if worker_type not in worker_results:
+            worker_results[worker_type] = []
+        worker_results[worker_type].append(result_content)
+        
+        # Increment the step index after worker completes
+        current_step_index = state.get("current_step_index", 0)
+        
         return Command(
             update={
                 "messages": [
-                    HumanMessage(content=result["messages"][-1].content, name="coder")
-                ]
+                    HumanMessage(content=result_content, name=worker_type)
+                ],
+                "current_step_index": current_step_index + 1,
+                "context": context_update,
+                "worker_results": worker_results
             },
             goto="supervisor",
         )
     
-    return coder_node
+    return worker_node
+
+
+def extract_worker_result(worker_type: str, result: dict, state: State) -> str:
+    """Extract a clean, useful result from the worker's output.
+    
+    This handles different response formats from different worker types.
+
+    Args:
+        worker_type: The type of worker (researcher or coder)
+        result: The raw result from the worker agent
+        state: The current state for context
+
+    Returns:
+        A cleaned string with the relevant result information
+    """
+    # Handle empty results
+    if not result or "messages" not in result or not result["messages"]:
+        return f"No output from {worker_type}"
+    
+    # Get the last message from the agent
+    last_message = result["messages"][-1]
+    
+    # Default to extracting content directly
+    if hasattr(last_message, "content") and last_message.content:
+        result_content = last_message.content
+    else:
+        result_content = f"No content from {worker_type}"
+    
+    # Special handling based on worker type
+    if worker_type == "coder":
+        # For coder outputs, extract the actual result values from code execution
+        if "```" in result_content:
+            # Try to extract stdout from code execution
+            import re
+            stdout_match = re.search(r"Stdout:\s*(.*?)(?:\n\n|$)", result_content, re.DOTALL)
+            if stdout_match:
+                # Extract the actual execution output, not just the code
+                execution_result = stdout_match.group(1).strip()
+                if execution_result:
+                    # Check if this is just a simple number result
+                    if re.match(r"^\d+(\.\d+)?$", execution_result):
+                        return execution_result
+                    else:
+                        return f"Code executed with result: {execution_result}"
+            
+            # If we couldn't find stdout, try to extract output in a different way
+            # Look for "Result:" or similar indicators
+            result_match = re.search(r"(?:Result|Output|Answer):\s*(.*?)(?:\n\n|$)", result_content, re.DOTALL)
+            if result_match:
+                return result_match.group(1).strip()
+    
+    elif worker_type == "researcher":
+        # For researcher outputs, keep the full detailed response
+        # but ensure it's well-formatted
+        if len(result_content) > 800:
+            # If too long, try to extract key sections
+            # Look for summary or conclusion sections
+            import re
+            summary_match = re.search(r"(?:Summary|Conclusion|To summarize|In summary):(.*?)(?:\n\n|$)", 
+                                      result_content, re.IGNORECASE | re.DOTALL)
+            if summary_match:
+                return summary_match.group(1).strip()
+    
+    # If no special handling was triggered, return the content as is
+    return result_content
 
 
 # --- Graph assembly -------------------------------------------------------
@@ -140,19 +431,52 @@ def create_agent_supervisor_graph() -> StateGraph:
     # Initialize the graph with our State type
     builder = StateGraph(State)
     
-    # Start the graph at the supervisor (like the notebook)
-    builder.add_edge(START, "supervisor")
-    
-    # Add the supervisor node
+    # Add control nodes
+    builder.add_node("planner", planner_node)
     builder.add_node("supervisor", supervisor_node)
+    builder.add_node("critic", critic_node)
+    builder.add_node("final_answer", final_answer_node)
+
+    # Add worker nodes dynamically based on WORKERS list
+    for worker_type in WORKERS:
+        builder.add_node(worker_type, create_worker_node(worker_type))
     
-    # Add worker nodes (matching notebook pattern)
-    builder.add_node("researcher", create_researcher_node())
-    builder.add_node("coder", create_coder_node())
+    # Define the workflow
+    builder.add_edge(START, "supervisor")
+    builder.add_edge("planner", "supervisor")
+    builder.add_edge("critic", "supervisor")
+    builder.add_edge("critic", "final_answer")  # Add edge from critic to final_answer
+    builder.add_edge("final_answer", END)  # Final answer node goes to END
+    builder.add_edge("supervisor", END)  # Allow the supervisor to end the workflow
     
-    # Compile the graph
-    return builder.compile(name="Agent Supervisor")
+    # Connect all workers to supervisor
+    for worker_type in WORKERS:
+        builder.add_edge(worker_type, "supervisor")
+    
+    # Return the builder, not a compiled graph
+    # This allows the caller to compile with a checkpointer
+    return builder
 
 
-# Initialize the graph (makes it available for import)
-graph = create_agent_supervisor_graph()
+# --- Graph instantiation (with flexible checkpointing) -----------------------------
+
+def get_compiled_graph(checkpointer=None):
+    """Get a compiled graph with optional checkpointer.
+
+    Args:
+        checkpointer: Optional checkpointer for persistence
+
+    Returns:
+        Compiled StateGraph ready for execution
+    """
+    builder = create_agent_supervisor_graph()
+    
+    # Compile with or without checkpointer
+    if checkpointer:
+        return builder.compile(checkpointer=checkpointer, name="Structured Reasoning Loop")
+    else:
+        return builder.compile(name="Structured Reasoning Loop")
+
+
+# Initialize a default non-checkpointed graph (for backward compatibility)
+graph = get_compiled_graph()

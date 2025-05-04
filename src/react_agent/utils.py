@@ -7,7 +7,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 import asyncio
 from datetime import UTC, datetime
-from react_agent.state import MEMBERS
+from react_agent.state import WORKERS, MEMBERS, ROUTING, VERDICTS
 
 
 # Load environment variables from .env file
@@ -27,17 +27,31 @@ def get_message_text(msg: BaseMessage) -> str:
 
 
 def format_system_prompt(prompt_template: str) -> str:
-    """Format a system prompt template with current system time and members.
+    """Format a system prompt template with current system time and available agents.
     
     Args:
         prompt_template: The prompt template to format
         
     Returns:
-        The formatted prompt with system time and members
+        The formatted prompt with system time and agent information
     """
+    # Get example workers for templates
+    example_worker_1 = WORKERS[0] if WORKERS else "researcher"
+    example_worker_2 = WORKERS[1] if len(WORKERS) > 1 else "coder"
+    
+    # Get verdicts for templates
+    correct_verdict = VERDICTS[0] if VERDICTS else "CORRECT"
+    retry_verdict = VERDICTS[1] if len(VERDICTS) > 1 else "RETRY"
+    
     return prompt_template.format(
         system_time=datetime.now(tz=UTC).isoformat(),
-        members=MEMBERS
+        workers=", ".join(WORKERS),
+        members=", ".join(MEMBERS),
+        worker_options=", ".join([f'"{w}"' for w in WORKERS]),
+        example_worker_1=example_worker_1,
+        example_worker_2=example_worker_2,
+        correct_verdict=correct_verdict,
+        retry_verdict=retry_verdict
     )
 
 
