@@ -70,9 +70,9 @@ class Configuration:
 
     # LLM Configuration - Default model for backward compatibility
     model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        # default="openai/gpt-4o-mini",  # Original config
-        # default="anthropic/claude-3-7-sonnet-20240620",  # Not available
-        default="anthropic/claude-3-5-sonnet-20240620",  # Revert to 3.5 as it's available
+        default="openai/gpt-4o-mini",  # Original config
+        # default="anthropic/claude-3-7-sonnet-20250219",  # Not available
+        # default="anthropic/claude-3-5-sonnet-20240620",  # Revert to 3.5 as it's available
         metadata={
             "description": "The default large language model used by the agents (provider/model_name)."
         },
@@ -81,7 +81,7 @@ class Configuration:
     # Model for the researcher (information gathering) - use powerful model
     researcher_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
         # default="openai/gpt-4o-mini",  # Original config
-        # default="anthropic/claude-3-7-sonnet-20240620",  # Not available
+        # default="anthropic/claude-3-7-sonnet-20250219",  # Not available
         default="anthropic/claude-3-5-sonnet-20240620",  # Revert to 3.5 as it's available
         metadata={
             "description": "The model used by the researcher agent for gathering information (provider/model_name)."
@@ -90,7 +90,8 @@ class Configuration:
     
     # Model for the coder (code execution) - use Claude Sonnet
     coder_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        default="anthropic/claude-3-5-sonnet-20240620",  # Keep using 3.5 as it's available
+        # default="anthropic/claude-3-7-sonnet-20250219",  # Keep using 3.7 as it's available
+        default="anthropic/claude-3-5-sonnet-20240620", 
         metadata={
             "description": "The model used by the coder agent for programming tasks (provider/model_name)."
         },
@@ -124,8 +125,8 @@ class Configuration:
     
     # Model for final answer generation - using Claude for precise formatting
     final_answer_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        default="anthropic/claude-3-5-sonnet-20240620",  # Keep using 3.5 as it's available
-        # default="anthropic/claude-3-7-sonnet-20240620",  # Not available
+        # default="anthropic/claude-3-5-sonnet-20240620",  # Keep using 3.5 as it's available
+        default="anthropic/claude-3-7-sonnet-20250219",  # Not available
         metadata={
             "description": "The model used for generating the final answers in GAIA benchmark format (provider/model_name)."
         },

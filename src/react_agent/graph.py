@@ -109,15 +109,15 @@ def planner_node(state: State) -> Command[WorkerDestination]:
 
 def final_answer_node(state: State) -> Command[Literal["__end__"]]:
     """Generate a final answer based on gathered information.
-
+    
     Args:
         state: The current state with messages and context
-
+        
     Returns:
         Command with final answer
     """
     configuration = Configuration.from_context()
-
+    
     # Track steps
     steps_taken = state.get("steps_taken", 0)
     steps_taken += 1

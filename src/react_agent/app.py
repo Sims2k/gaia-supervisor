@@ -209,14 +209,16 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
             results_log.append({
                 "Task ID": task_id, 
                 "Question": question_text, 
-                "Answer": answer
+                "Answer": answer,
+                "Correct Answer": "Pending submission..."  # Placeholder until we get results
             })
         except Exception as e:
             print(f"Error running agent on task {task_id}: {e}")
             results_log.append({
                 "Task ID": task_id, 
                 "Question": question_text, 
-                "Answer": f"AGENT ERROR: {e}"
+                "Answer": f"AGENT ERROR: {e}",
+                "Correct Answer": "Error - not submitted"
             })
 
     if not answers_payload:
@@ -234,6 +236,27 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
         response = requests.post(submit_url, json=submission_data, timeout=60)
         response.raise_for_status()
         result_data = response.json()
+        
+        # Update results with correct answers if available
+        if "results" in result_data:
+            # Map task_id to correct answer
+            correct_answers = {}
+            for result in result_data.get("results", []):
+                task_id = result.get("task_id")
+                correct_answer = result.get("correct_answer", "Not provided")
+                is_correct = result.get("is_correct", False)
+                submitted = result.get("submitted_answer", "")
+                
+                if task_id:
+                    status = "✅ Correct" if is_correct else "❌ Incorrect"
+                    correct_answers[task_id] = f"{correct_answer} ({status})"
+            
+            # Update results_log with correct answers
+            for result in results_log:
+                task_id = result.get("Task ID")
+                if task_id in correct_answers:
+                    result["Correct Answer"] = correct_answers[task_id]
+        
         final_status = (
             f"Submission Successful!\n"
             f"User: {result_data.get('username')}\n"
@@ -297,11 +320,35 @@ def test_random_question():
         agent = GaiaAgent()
         answer = agent(question_text)
         
+        # Attempt to get the correct answer using a test submission
+        correct_answer = "Unknown (submit all questions to see correct answers)"
+        try:
+            test_submit_response = requests.post(
+                f"{api_url}/submit", 
+                json={
+                    "username": "test_user",
+                    "agent_code": "test_code",
+                    "answers": [{"task_id": task_id, "submitted_answer": answer}]
+                },
+                timeout=15
+            )
+            if test_submit_response.status_code == 200:
+                submit_data = test_submit_response.json()
+                if "results" in submit_data and submit_data["results"]:
+                    result = submit_data["results"][0]
+                    correct_answer = result.get("correct_answer", "Not provided")
+                    is_correct = result.get("is_correct", False)
+                    status = "✅ Correct" if is_correct else "❌ Incorrect"
+                    correct_answer = f"{correct_answer} ({status})"
+        except Exception as e:
+            print(f"Error getting correct answer: {e}")
+        
         # Return results
         result = {
             "Task ID": task_id,
             "Question": question_text,
-            "Answer": answer
+            "Answer": answer,
+            "Correct Answer": correct_answer
         }
         
         return "Test completed successfully.", result
