@@ -1,24 +1,19 @@
-## GAIA Supervisor – Multi‑Agent Toolkit for the GAIA Benchmark
+# GAIA Supervisor
 
-A modular Supervisor architecture built with **LangGraph** and **LangChain**.
-It routes a user request through a *Planner → Worker loop → Critic* pipeline, persisting context via LangGraph checkpointers so every worker sees the latest state. Two lightweight tools—web search and Python execution—keep runtime costs low, while the design lets you add new workers in a few lines.
+A modular Supervisor-Planner-Worker-Critic architecture built with **LangGraph** and **LangChain** for the GAIA benchmark.
 
----
+## 🏗 Architecture Overview
 
-## ✨  Key Features
+The system implements a sophisticated agent architecture that processes complex tasks through a structured workflow:
 
-* **Supervisor routing** powered by an LLM that decides which agent acts next ([LangChain AI][1])
-* **Planner node** drafts a step‑by‑step plan before any tool call, reducing token waste
-* **Researcher** (TavilySearchResults) and **Coder** (PythonREPLTool) workers handle search & code ([Introduction | 🦜️🔗 LangChain][2], [Introduction | 🦜️🔗 LangChain][3])
-* **Critic node** verifies the final answer and triggers automatic retries when needed
-* **State checkpoints** provide memory, fault‑tolerance, and replay via LangGraph's persistence layer ([LangChain AI][4])
-* **Plug‑and‑play workers**: add SQL, browser, or custom tools by extending the graph
-* Compatible with OpenAI, Gemini, Claude, or any chat‑model supported by LangChain ([LangChain AI][5])
-* Zero‑docker local development thanks to the LangGraph CLI "in‑memory" server ([LangChain AI][5])
+1. **Supervisor**: Coordinates the workflow, routes to appropriate nodes (Planner, Worker agents, Critic)
+2. **Planner**: Creates a structured execution plan with specific steps before any tool execution
+3. **Worker Agents**:
+   - **Researcher**: Uses Tavily Search API to find information online
+   - **Coder**: Executes Python code to solve computational tasks
+4. **Critic**: Verifies final answers, ensures GAIA formatting compliance
 
----
-
-## 🏗  Architecture
+The architecture includes automatic retries and fallback mechanisms to prevent infinite loops and recursion limits.
 
 ```mermaid
 flowchart LR
@@ -28,142 +23,128 @@ flowchart LR
         R[Researcher]
         C[Coder]
         K[Critic]
+        F[Final Answer]
     end
-    S -->|once| P
+    START --> S
+    S -->|first| P
     P --> S
-    S -->|plan steps| R & C
+    S -->|route| R & C
     R --> S
     C --> S
     S --> K
-    K -->|CORRECT| End((Finish))
+    K -->|CORRECT| F
     K -->|RETRY| P
+    F --> END
+    S -->|direct finish| END
 ```
 
-*Every node shares a single graph state that includes the conversation history + a `context` dictionary. Checkpointers persist this state between retries or restarts.* ([LangChain AI][4])
+## ✨ Key Features
 
----
+* **LangGraph StateGraph Architecture**: Maintains state across the entire workflow
+* **Specialized Worker Agents**: Each with dedicated prompts and model configurations
+* **GAIA Benchmark Integration**: Formats answers according to GAIA specifications
+* **Gradio Web Interface**: For running evaluations and testing
+* **Checkpoint System**: Provides persistence and fault tolerance
+* **Multi-Model Support**: Works with OpenAI, Anthropic Claude, and Google Gemini models
+* **Recursion Protection**: Built-in step counting and termination mechanisms
 
-## 🚀  Quickstart (Windows 11, Python 3.12, **uv** + pyenv‑win)
-
-### 1. Prerequisites
-
-| Tool              | Purpose                                 | Docs                |
-| ----------------- | --------------------------------------- | ------------------- |
-| **pyenv‑win**     | Manage multiple Python versions         |  ([GitHub][6])      |
-| **uv**            | Ultra‑fast `pip` + virtual‑env manager  |  ([Astral Docs][7]) |
-| **LangGraph CLI** | Local API server + templates            |  ([PyPI][8])        |
-| **Git**           | Clone the repository                    |                     |
-
-### 2. Clone & set Python
-
-```powershell
-git clone https://github.com/<your‑org>/gaia‑supervisor.git
-cd gaia‑supervisor
-
-pyenv install 3.12.2
-pyenv local 3.12.2
-```
-
-### 3. Create env & install deps
-
-```powershell
-# install uv once
-irm https://astral.sh/uv/install.ps1 | iex    # PowerShell script
-
-uv venv .venv
-.\.venv\Scripts\Activate.ps1
-
-uv pip sync          # reads uv.lock
-uv pip install -e .  # editable install
-```
-
-### 4. Configure secrets
-
-Copy `.env.example` → `.env` and fill in keys (OpenAI, Tavily, LangSmith, etc.).
-See LangSmith's key guide for details ([LangSmith][9]).
-
-### 5. Launch the local server
-
-```powershell
-langgraph dev
-```
-
-The CLI starts an in‑memory LangGraph API at **[http://localhost:2024](http://localhost:2024)** with Swagger docs and links to LangGraph Studio ([LangChain AI][10]).
-
----
-
-## 🛠  Using the API
-
-Python (sync) snippet:
-
-```python
-from langgraph_sdk import get_sync_client
-client = get_sync_client(url="http://localhost:2024")
-
-for event in client.runs.stream(
-        None, "agent",
-        input={"messages":[{"role":"user","content":"GDP of Brazil in 2023?"}]},
-        stream_mode="updates"):
-    print(event.event, event.data)
-```
-
-Equivalent examples for async Python, JS/TS, and raw REST are in the **/docs/api** folder.
-
----
-
-## ➕  Extending Workers
-
-1. Implement the tool (must satisfy LangChain's Runnable interface).
-2. Call `create_react_agent(llm, [your_tool], name="<worker>")`.
-3. Add the node and a conditional edge in `graph.py`.
-4. Update the Planner prompt to include the new worker.
-
-LangGraph's supervisor tutorial shows the exact pattern ([LangChain AI][1]).
-
----
-
-## 🧩  Project Structure
+## 📋 Project Structure
 
 ```
 gaia-supervisor/
-│  app.py           # CLI entry‑point
-│  graph.py         # builds & compiles the LangGraph
-│  planner.py       # JSON‑plan LLM node
-│  critic.py        # verification LLM node
-│  workers/
-│     researcher.py # TavilySearchResults tool wrapper
-│     coder.py      # PythonREPLTool wrapper
-│  state.py         # TypedDict for shared state
-│  prompts.py       # central prompt strings
-│  utils.py         # helpers (retry, merge_context, etc.)
-│  README.md
+├── src/
+│   └── react_agent/               # Core source code
+│       ├── __init__.py            # Module exports
+│       ├── app.py                 # Gradio web interface & GAIA integration
+│       ├── configuration.py       # Centralized config settings
+│       ├── graph.py               # LangGraph builder and node definitions
+│       ├── supervisor_node.py     # Supervisor implementation
+│       ├── prompts.py             # System prompts for all agents
+│       ├── state.py               # State definitions and constants
+│       ├── tools.py               # Tool implementations
+│       └── utils.py               # Helper functions
+├── langgraph.json                 # LangGraph API server config
+├── pyproject.toml                 # Project dependencies
+├── requirements.txt               # Direct dependencies list
+└── .env.example                   # Environment variable templates
 ```
 
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Python 3.11+ (3.12 recommended)
+- API keys for: OpenAI, Anthropic, Google, Tavily, LangSmith (optional)
+
+### Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/yourusername/gaia-supervisor.git
+   cd gaia-supervisor
+   ```
+
+2. **Setup environment**
+   ```bash
+   # Create and activate a virtual environment
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   
+   # Install dependencies
+   pip install -e .
+   ```
+
+3. **Configure API keys**
+   ```bash
+   # Copy the example env file
+   cp .env.example .env
+   
+   # Edit .env with your API keys
+   ```
+
+### Running the application
+
+1. **Start the LangGraph server**
+   ```bash
+   langgraph dev
+   ```
+
+2. **Run the Gradio interface**
+   ```bash
+   python -m src.react_agent.app
+   ```
+
+## 📊 GAIA Benchmark Evaluation
+
+The GAIA Benchmark integration provides:
+
+1. **Question fetching**: Retrieves benchmark questions from the GAIA API
+2. **Agent evaluation**: Processes questions through the agent architecture
+3. **Answer submission**: Submits formatted answers to the GAIA leaderboard
+4. **Score tracking**: Displays results with correct answers
+
+The agent formats answers according to GAIA requirements:
+- Numbers without units or commas
+- Very concise responses
+- No explanations or reasoning
+- Specific formatting for lists and text
+
+## 🔧 Configuration Options
+
+Key settings in `configuration.py`:
+
+| Setting | Description |
+|---------|-------------|
+| `model` | Default model for all agents |
+| `*_model` | Specific models for each agent role |
+| `recursion_limit` | Maximum recursion steps |
+| `max_iterations` | Maximum planning iterations |
+| `max_search_results` | Maximum web search results |
+
+## 📝 License
+
+MIT
+
 ---
 
-## 📈  GAIA Benchmark Alignment
-
-This architecture mirrors the multi‑phase designs used by top GAIA leaderboard agents, which combine structured planning, tool execution, verification, and controlled retries ([Hugging Face][11]).
-
----
-
-## 📝  License
-
-[MIT](LICENSE)
-
----
-
-**Happy hacking!**
-Clone, configure, and start routing tasks through your own GAIA‑ready Supervisor pipeline.
-
-[1]: https://langchain-ai.github.io/langgraph/tutorials/multi_agent/agent_supervisor/?utm_source=chatgpt.com "Multi-agent supervisor - GitHub Pages"
-[2]: https://python.langchain.com/api_reference/community/tools/langchain_community.tools.tavily_search.tool.TavilySearchResults.html?utm_source=chatgpt.com "TavilySearchResults — LangChain documentation"
-[3]: https://python.langchain.com/api_reference/experimental/tools/langchain_experimental.tools.python.tool.PythonREPLTool.html?utm_source=chatgpt.com "PythonREPLTool — LangChain documentation"
-[4]: https://langchain-ai.github.io/langgraph/concepts/persistence/?utm_source=chatgpt.com "Persistence - Langgraph - GitHub Pages"
-[5]: https://langchain-ai.github.io/langgraph/cloud/reference/cli/?utm_source=chatgpt.com "LangGraph CLI - GitHub Pages"
-[6]: https://github.com/pyenv-win/pyenv-win?utm_source=chatgpt.com "pyenv-win/pyenv-win: pyenv for Windows. pyenv is a ... - GitHub"
-[7]: https://docs.astral.sh/uv/guides/install-python/?utm_source=chatgpt.com "Installing and managing Python | uv - Astral Docs"
-[8]: https://pypi.org/project/langgraph-cli/?utm_source=chatgpt.com "langgraph-cli - PyPI"
-[9]: https://docs.smith.langchain.com/administration/how_to_guides/organization_management/create_account_api_key?utm_source=chatgpt.com "Create an account and API key | 🦜️🛠️ LangSmith - LangChain"
-[10]: https://langchain-ai.github.io/langgraph/concepts/langgraph_studio/?utm_source=chatgpt.com "LangGraph Studio - GitHub Pages"
-[11]: https://huggingface.co/spaces/gaia-benchmark/leaderboard?utm_source=chatgpt.com "GAIA Leaderboard - a Hugging Face Space by gaia-benchmark"
+**Built with [LangGraph](https://github.com/langchain-ai/langgraph)** - An open-source framework for building stateful, multi-actor applications with LLMs
