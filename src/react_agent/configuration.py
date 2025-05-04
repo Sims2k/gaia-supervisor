@@ -68,28 +68,97 @@ class Configuration:
         },
     )
 
-    # LLM Configuration
+    # LLM Configuration - Default model for backward compatibility
     model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        default="openai/gpt-4o-mini", # Switched to OpenAI for now
-        # default="google_genai/gemini-2.0-flash", # Keep Gemini as an option
+        default="openai/gpt-4o-mini",  # Original config
+        # default="anthropic/claude-3-7-sonnet-20250219",  # Not available
+        # default="anthropic/claude-3-5-sonnet-20240620",  # Revert to 3.5 as it's available
         metadata={
-            "description": "The large language model used by the agents (provider/model_name)."
+            "description": "The default large language model used by the agents (provider/model_name)."
         },
     )
     
-    # Planner model (lightweight reasoning model)
-    planner_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        default="openai/gpt-4o-mini", # Can be replaced with a cheaper model
+    # Model for the researcher (information gathering) - use powerful model
+    researcher_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
+        # default="openai/gpt-4o-mini",  # Original config
+        # default="anthropic/claude-3-7-sonnet-20250219",  # Not available
+        default="anthropic/claude-3-5-sonnet-20240620",  # Revert to 3.5 as it's available
         metadata={
-            "description": "The lightweight reasoning model used by the planner (provider/model_name)."
+            "description": "The model used by the researcher agent for gathering information (provider/model_name)."
+        },
+    )
+    
+    # Model for the coder (code execution) - use Claude Sonnet
+    coder_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
+        # default="anthropic/claude-3-7-sonnet-20250219",  # Keep using 3.7 as it's available
+        default="anthropic/claude-3-5-sonnet-20240620", 
+        metadata={
+            "description": "The model used by the coder agent for programming tasks (provider/model_name)."
+        },
+    )
+    
+    # Model for lightweight reasoning tasks (planner, supervisor, critic)
+    planner_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
+        default="google_genai/gemini-1.5-flash",  # Revert to Flash to avoid quota issues
+        # default="google_genai/gemini-1.5-pro",  # Hitting rate limits
+        metadata={
+            "description": "The lightweight reasoning model used by the planner, supervisor, and critic (provider/model_name)."
+        },
+    )
+    
+    # Same model used for supervisor and critic (points to planner_model)
+    supervisor_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
+        default="google_genai/gemini-1.5-flash",  # Revert to Flash to avoid quota issues
+        # default="google_genai/gemini-1.5-pro",  # Hitting rate limits
+        metadata={
+            "description": "The model used by the supervisor for routing (provider/model_name)."
+        },
+    )
+    
+    critic_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
+        default="google_genai/gemini-1.5-flash",  # Revert to Flash to avoid quota issues
+        # default="google_genai/gemini-1.5-pro",  # Hitting rate limits
+        metadata={
+            "description": "The model used by the critic for evaluation (provider/model_name)."
+        },
+    )
+    
+    # Model for final answer generation - using Claude for precise formatting
+    final_answer_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
+        # default="anthropic/claude-3-5-sonnet-20240620",  # Keep using 3.5 as it's available
+        default="anthropic/claude-3-7-sonnet-20250219",  # Not available
+        metadata={
+            "description": "The model used for generating the final answers in GAIA benchmark format (provider/model_name)."
         },
     )
 
     # Tool Configuration
     max_search_results: int = field(
-        default=5,
+        default=10,
         metadata={
             "description": "The maximum number of search results to return."
+        },
+    )
+    
+    # Execution Configuration
+    recursion_limit: int = field(
+        default=50,
+        metadata={
+            "description": "Maximum number of recursion steps allowed in the LangGraph execution."
+        },
+    )
+    
+    max_iterations: int = field(
+        default=12,
+        metadata={
+            "description": "Maximum number of iterations allowed to prevent infinite loops."
+        },
+    )
+    
+    allow_agent_to_extract_answers: bool = field(
+        default=True,
+        metadata={
+            "description": "Whether to allow the agent to extract answers from context when formatting fails."
         },
     )
 
