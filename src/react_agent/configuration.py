@@ -70,8 +70,9 @@ class Configuration:
 
     # LLM Configuration - Default model for backward compatibility
     model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        # default="openai/gpt-4o-mini",  # Previous config
-        default="anthropic/claude-3-7-sonnet-20240620",  # Using Claude 3.7 Sonnet as default
+        # default="openai/gpt-4o-mini",  # Original config
+        # default="anthropic/claude-3-7-sonnet-20240620",  # Not available
+        default="anthropic/claude-3-5-sonnet-20240620",  # Revert to 3.5 as it's available
         metadata={
             "description": "The default large language model used by the agents (provider/model_name)."
         },
@@ -79,8 +80,9 @@ class Configuration:
     
     # Model for the researcher (information gathering) - use powerful model
     researcher_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        # default="openai/gpt-4o-mini",  # Previous config
-        default="anthropic/claude-3-7-sonnet-20240620",  # Using Claude 3.7 Sonnet for research
+        # default="openai/gpt-4o-mini",  # Original config
+        # default="anthropic/claude-3-7-sonnet-20240620",  # Not available
+        default="anthropic/claude-3-5-sonnet-20240620",  # Revert to 3.5 as it's available
         metadata={
             "description": "The model used by the researcher agent for gathering information (provider/model_name)."
         },
@@ -88,8 +90,7 @@ class Configuration:
     
     # Model for the coder (code execution) - use Claude Sonnet
     coder_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        # default="anthropic/claude-3-5-sonnet-20240620",  # Previous config
-        default="anthropic/claude-3-7-sonnet-20240620",  # Using Claude 3.7 Sonnet for coding
+        default="anthropic/claude-3-5-sonnet-20240620",  # Keep using 3.5 as it's available
         metadata={
             "description": "The model used by the coder agent for programming tasks (provider/model_name)."
         },
@@ -97,8 +98,8 @@ class Configuration:
     
     # Model for lightweight reasoning tasks (planner, supervisor, critic)
     planner_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        # default="google_genai/gemini-1.5-flash",  # Previous config
-        default="google_genai/gemini-1.5-pro",  # Using Gemini 1.5 Pro for better reasoning
+        default="google_genai/gemini-1.5-flash",  # Revert to Flash to avoid quota issues
+        # default="google_genai/gemini-1.5-pro",  # Hitting rate limits
         metadata={
             "description": "The lightweight reasoning model used by the planner, supervisor, and critic (provider/model_name)."
         },
@@ -106,16 +107,16 @@ class Configuration:
     
     # Same model used for supervisor and critic (points to planner_model)
     supervisor_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        # default="google_genai/gemini-1.5-flash",  # Previous config
-        default="google_genai/gemini-1.5-pro",  # Using Gemini 1.5 Pro for better reasoning
+        default="google_genai/gemini-1.5-flash",  # Revert to Flash to avoid quota issues
+        # default="google_genai/gemini-1.5-pro",  # Hitting rate limits
         metadata={
             "description": "The model used by the supervisor for routing (provider/model_name)."
         },
     )
     
     critic_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        # default="google_genai/gemini-1.5-flash",  # Previous config 
-        default="google_genai/gemini-1.5-pro",  # Using Gemini 1.5 Pro for better reasoning
+        default="google_genai/gemini-1.5-flash",  # Revert to Flash to avoid quota issues
+        # default="google_genai/gemini-1.5-pro",  # Hitting rate limits
         metadata={
             "description": "The model used by the critic for evaluation (provider/model_name)."
         },
@@ -123,8 +124,8 @@ class Configuration:
     
     # Model for final answer generation - using Claude for precise formatting
     final_answer_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        # default="anthropic/claude-3-5-sonnet-20240620",  # Previous config
-        default="anthropic/claude-3-7-sonnet-20240620",  # Using Claude 3.7 Sonnet for final answers
+        default="anthropic/claude-3-5-sonnet-20240620",  # Keep using 3.5 as it's available
+        # default="anthropic/claude-3-7-sonnet-20240620",  # Not available
         metadata={
             "description": "The model used for generating the final answers in GAIA benchmark format (provider/model_name)."
         },
