@@ -70,7 +70,8 @@ class Configuration:
 
     # LLM Configuration - Default model for backward compatibility
     model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        default="openai/gpt-4o-mini",
+        # default="openai/gpt-4o-mini",  # Previous config
+        default="anthropic/claude-3-7-sonnet-20240620",  # Using Claude 3.7 Sonnet as default
         metadata={
             "description": "The default large language model used by the agents (provider/model_name)."
         },
@@ -78,7 +79,8 @@ class Configuration:
     
     # Model for the researcher (information gathering) - use powerful model
     researcher_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        default="openai/gpt-4o-mini",
+        # default="openai/gpt-4o-mini",  # Previous config
+        default="anthropic/claude-3-7-sonnet-20240620",  # Using Claude 3.7 Sonnet for research
         metadata={
             "description": "The model used by the researcher agent for gathering information (provider/model_name)."
         },
@@ -86,7 +88,8 @@ class Configuration:
     
     # Model for the coder (code execution) - use Claude Sonnet
     coder_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        default="anthropic/claude-3-5-sonnet-20240620",
+        # default="anthropic/claude-3-5-sonnet-20240620",  # Previous config
+        default="anthropic/claude-3-7-sonnet-20240620",  # Using Claude 3.7 Sonnet for coding
         metadata={
             "description": "The model used by the coder agent for programming tasks (provider/model_name)."
         },
@@ -94,7 +97,8 @@ class Configuration:
     
     # Model for lightweight reasoning tasks (planner, supervisor, critic)
     planner_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        default="google_genai/gemini-1.5-flash",
+        # default="google_genai/gemini-1.5-flash",  # Previous config
+        default="google_genai/gemini-1.5-pro",  # Using Gemini 1.5 Pro for better reasoning
         metadata={
             "description": "The lightweight reasoning model used by the planner, supervisor, and critic (provider/model_name)."
         },
@@ -102,14 +106,16 @@ class Configuration:
     
     # Same model used for supervisor and critic (points to planner_model)
     supervisor_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        default="google_genai/gemini-1.5-flash",
+        # default="google_genai/gemini-1.5-flash",  # Previous config
+        default="google_genai/gemini-1.5-pro",  # Using Gemini 1.5 Pro for better reasoning
         metadata={
             "description": "The model used by the supervisor for routing (provider/model_name)."
         },
     )
     
     critic_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        default="openai/gpt-4o-mini",
+        # default="google_genai/gemini-1.5-flash",  # Previous config 
+        default="google_genai/gemini-1.5-pro",  # Using Gemini 1.5 Pro for better reasoning
         metadata={
             "description": "The model used by the critic for evaluation (provider/model_name)."
         },
@@ -117,7 +123,8 @@ class Configuration:
     
     # Model for final answer generation - using Claude for precise formatting
     final_answer_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        default="anthropic/claude-3-5-sonnet-20240620",
+        # default="anthropic/claude-3-5-sonnet-20240620",  # Previous config
+        default="anthropic/claude-3-7-sonnet-20240620",  # Using Claude 3.7 Sonnet for final answers
         metadata={
             "description": "The model used for generating the final answers in GAIA benchmark format (provider/model_name)."
         },
@@ -125,7 +132,7 @@ class Configuration:
 
     # Tool Configuration
     max_search_results: int = field(
-        default=5,
+        default=10,
         metadata={
             "description": "The maximum number of search results to return."
         },
