@@ -24,6 +24,24 @@ class Configuration:
         },
     )
     
+    # Planner configuration
+    planner_prompt: str = field(
+        default=prompts.PLANNER_PROMPT,
+        metadata={
+            "description": "The system prompt for the planner agent. "
+            "This prompt guides how the planner creates structured plans."
+        },
+    )
+    
+    # Critic configuration
+    critic_prompt: str = field(
+        default=prompts.CRITIC_PROMPT,
+        metadata={
+            "description": "The system prompt for the critic agent. "
+            "This prompt guides how the critic evaluates answers."
+        },
+    )
+    
     # Worker agents configuration
     researcher_prompt: str = field(
         default=prompts.RESEARCHER_PROMPT,
@@ -56,6 +74,14 @@ class Configuration:
         # default="google_genai/gemini-2.0-flash", # Keep Gemini as an option
         metadata={
             "description": "The large language model used by the agents (provider/model_name)."
+        },
+    )
+    
+    # Planner model (lightweight reasoning model)
+    planner_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
+        default="openai/gpt-4o-mini", # Can be replaced with a cheaper model
+        metadata={
+            "description": "The lightweight reasoning model used by the planner (provider/model_name)."
         },
     )
 

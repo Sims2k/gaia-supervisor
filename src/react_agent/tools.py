@@ -21,7 +21,7 @@ from react_agent.configuration import Configuration
 # Create Tavily tool using configuration from context (more consistent approach)
 def create_tavily_tool():
     """Create the Tavily search tool with configuration from context.
-    
+
     Returns:
         Configured TavilySearchResults tool
     """
