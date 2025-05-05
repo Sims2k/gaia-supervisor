@@ -125,8 +125,9 @@ class Configuration:
     
     # Model for final answer generation - using Claude for precise formatting
     final_answer_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
+        default="openai/gpt-4o-mini",  # Use GPT-4o-mini instead of Claude to avoid overload issues
         # default="anthropic/claude-3-5-sonnet-20240620",  # Keep using 3.5 as it's available
-        default="anthropic/claude-3-7-sonnet-20250219",  # Not available
+        # default="anthropic/claude-3-7-sonnet-20250219",  # Not available
         metadata={
             "description": "The model used for generating the final answers in GAIA benchmark format (provider/model_name)."
         },
@@ -137,6 +138,27 @@ class Configuration:
         default=10,
         metadata={
             "description": "The maximum number of search results to return."
+        },
+    )
+    
+    max_wikipedia_results: int = field(
+        default=3,
+        metadata={
+            "description": "The maximum number of Wikipedia results to return."
+        },
+    )
+    
+    max_arxiv_results: int = field(
+        default=5,
+        metadata={
+            "description": "The maximum number of ArXiv paper results to return."
+        },
+    )
+    
+    max_youtube_results: int = field(
+        default=3,
+        metadata={
+            "description": "The maximum number of YouTube video results to return."
         },
     )
     

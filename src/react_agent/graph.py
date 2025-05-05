@@ -14,7 +14,7 @@ from langgraph.types import Command
 
 from react_agent.configuration import Configuration
 from react_agent.state import WORKERS, MEMBERS, ROUTING, VERDICTS, State, Router, Plan, PlanStep, CriticVerdict
-from react_agent.tools import TOOLS, tavily_tool, python_repl_tool
+from react_agent.tools import TOOLS, tavily_tool, python_repl_tool, wikipedia_tool, arxiv_tool, youtube_tool, youtube_transcript_tool, wolfram_alpha_tool
 from react_agent.utils import load_chat_model, format_system_prompt, get_message_text
 from react_agent import prompts
 from react_agent.supervisor_node import supervisor_node
@@ -109,15 +109,15 @@ def planner_node(state: State) -> Command[WorkerDestination]:
 
 def final_answer_node(state: State) -> Command[Literal["__end__"]]:
     """Generate a final answer based on gathered information.
-    
+
     Args:
         state: The current state with messages and context
-        
+
     Returns:
         Command with final answer
     """
     configuration = Configuration.from_context()
-    
+
     # Track steps
     steps_taken = state.get("steps_taken", 0)
     steps_taken += 1
@@ -307,11 +307,11 @@ def create_worker_node(worker_type: str):
     if worker_type == "researcher":
         llm = load_chat_model(configuration.researcher_model)
         worker_prompt = prompts.RESEARCHER_PROMPT
-        worker_tools = [tavily_tool]
+        worker_tools = [tavily_tool, wikipedia_tool, arxiv_tool, youtube_tool, youtube_transcript_tool]
     elif worker_type == "coder":
         llm = load_chat_model(configuration.coder_model)
         worker_prompt = prompts.CODER_PROMPT
-        worker_tools = [python_repl_tool]
+        worker_tools = [python_repl_tool, wolfram_alpha_tool]
     else:
         # Default case
         llm = load_chat_model(configuration.model)
