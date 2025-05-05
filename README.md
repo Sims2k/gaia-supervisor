@@ -9,8 +9,8 @@ The system implements a sophisticated agent architecture that processes complex 
 1. **Supervisor**: Coordinates the workflow, routes to appropriate nodes (Planner, Worker agents, Critic)
 2. **Planner**: Creates a structured execution plan with specific steps before any tool execution
 3. **Worker Agents**:
-   - **Researcher**: Uses Tavily Search API to find information online
-   - **Coder**: Executes Python code to solve computational tasks
+   - **Researcher**: Uses Tavily Search API, Wikipedia, ArXiv, YouTube Search, and YouTube Transcript tools
+   - **Coder**: Executes Python code and uses Wolfram Alpha for computational tasks
 4. **Critic**: Verifies final answers, ensures GAIA formatting compliance
 
 The architecture includes automatic retries and fallback mechanisms to prevent infinite loops and recursion limits.
@@ -47,6 +47,7 @@ flowchart LR
 * **Checkpoint System**: Provides persistence and fault tolerance
 * **Multi-Model Support**: Works with OpenAI, Anthropic Claude, and Google Gemini models
 * **Recursion Protection**: Built-in step counting and termination mechanisms
+* **Rich Tool Ecosystem**: Includes web search, Wikipedia, ArXiv, YouTube, and Wolfram Alpha integration
 
 ## 📋 Project Structure
 
@@ -69,12 +70,25 @@ gaia-supervisor/
 └── .env.example                   # Environment variable templates
 ```
 
+## 🛠️ Available Tools
+
+The system includes a comprehensive set of tools for various tasks:
+
+1. **Web Search** (Tavily API): For general web queries and current information
+2. **Wikipedia**: For encyclopedic knowledge and factual lookups
+3. **ArXiv**: For scientific research papers and academic information
+4. **YouTube Search**: For finding relevant videos on any topic
+5. **YouTube Transcript**: For extracting and analyzing content from YouTube videos
+6. **Python REPL**: For executing code and performing calculations
+7. **Wolfram Alpha**: For mathematical computations, symbolic math, and advanced calculations
+
 ## 🚀 Quick Start
 
 ### Prerequisites
 
 - Python 3.11+ (3.12 recommended)
-- API keys for: OpenAI, Anthropic, Google, Tavily, LangSmith (optional)
+- API keys for: OpenAI, Anthropic, Google, Tavily, Wolfram Alpha
+- Python packages: youtube-transcript-api, pytube (for YouTube transcript extraction)
 
 ### Installation
 
@@ -111,7 +125,7 @@ gaia-supervisor/
 
 2. **Run the Gradio interface**
    ```bash
-   python -m src.react_agent.app
+   poetry run python .\src\react_agent\app.py
    ```
 
 ## 📊 GAIA Benchmark Evaluation
@@ -140,6 +154,9 @@ Key settings in `configuration.py`:
 | `recursion_limit` | Maximum recursion steps |
 | `max_iterations` | Maximum planning iterations |
 | `max_search_results` | Maximum web search results |
+| `max_wikipedia_results` | Maximum Wikipedia results |
+| `max_arxiv_results` | Maximum ArXiv results |
+| `max_youtube_results` | Maximum YouTube search results |
 
 ## 📝 License
 
